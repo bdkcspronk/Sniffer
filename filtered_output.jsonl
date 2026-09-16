@@ -37,3 +37,6 @@
 {"timestamp": "2026-09-16 13:08:00", "name": "Bradley", "mac": "74:F4:41:A4:6C:15", "rssi": -41, "channel": 10}
 {"timestamp": "2026-09-16 13:11:32", "name": "Bradley", "mac": "74:F4:41:A4:6C:15", "rssi": -42, "channel": 4}
 {"timestamp": "2026-09-16 13:19:39", "name": "Bradley", "mac": "74:F4:41:A4:6C:15", "rssi": -81, "channel": 7}
+{"timestamp": "2026-09-16 13:39:05", "name": "Bradley", "mac": "74:F4:41:A4:6C:15", "rssi": -33, "channel": 7}
+{"timestamp": "2026-09-16 13:39:06", "name": "Bradley", "mac": "74:F4:41:A4:6C:15", "rssi": -37, "channel": 8}
+{"timestamp": "2026-09-16 13:39:13", "name": "Bradley", "mac": "74:F4:41:A4:6C:15", "rssi": -51, "channel": 10}
