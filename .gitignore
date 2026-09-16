@@ -6,3 +6,6 @@
 __pycache__
 *.png
 filter.json
+all_devices_output.jsonl
+filtered_output.jsonl
+voice_queue.jsonl
