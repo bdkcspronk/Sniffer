@@ -1,20 +1,25 @@
 import json
+import os
 import serial
 import time
 import sys
 
-# Controleer of de gebruiker het argument '--all' heeft meegegeven
+# Check whether the user passed the '--all' argument
 DISABLE_FILTER = '--all' in sys.argv
 
-# Dictionary om bij te houden wanneer een MAC-adres voor het laatst gelogd is
-# Formaat: {"MAC_ADRES": timestamp_in_seconden}
+# Dictionary tracking when a MAC address was last logged
+# Format: {"MAC_ADDRESS": timestamp_in_seconds}
 last_logged_time = {}
 
-# Interval in seconden voor de herhaling
-# Maximaal 1x per seconde loggen per apparaat
+# Repeat interval in seconds
+# Log each device at most once per second
 LOG_INTERVAL = 1
+LOG_RETENTION_DAYS = 7
+LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+ENABLE_VOICE_ANNOUNCEMENTS = True
+VOICE_QUEUE_FILENAME = 'voice_queue.jsonl'
 
-# 1. Laad filter.json zodat bekende apparaten altijd een naam kunnen krijgen
+# 1. Load filter.json so known devices can always receive a name
 mac_to_name = {}
 
 try:
@@ -29,56 +34,137 @@ try:
 
     if DISABLE_FILTER:
         print(
-            f"🔓 Filter UITGESCHAKELD: Alle apparaten worden gelogd "
-            f"({len(mac_to_name)} bekende apparaten geladen)"
+            f"🔓 Filter DISABLED: All devices are being logged "
+            f"({len(mac_to_name)} known devices loaded)"
         )
     else:
         print(
-            f"🔒 Filter INGESCHAKELD: {len(mac_to_name)} "
-            f"apparaten geladen uit filter.json"
+            f"🔒 Filter ENABLED: {len(mac_to_name)} "
+            f"devices loaded from filter.json"
         )
 
 except Exception as e:
     if DISABLE_FILTER:
-        # Als --all gebruikt wordt, is filter.json niet noodzakelijk.
-        print(f"⚠️ filter.json kon niet worden geladen: {e}")
-        print("🔓 Filter UITGESCHAKELD: Alle apparaten worden gelogd")
+        # When --all is used, filter.json is not required.
+        print(f"⚠️ Could not load filter.json: {e}")
+        print("🔓 Filter DISABLED: All devices are being logged")
     else:
-        print(f"❌ Fout bij het laden van filter.json: {e}")
+        print(f"❌ Error loading filter.json: {e}")
         sys.exit(1)
 
 
-# 2. Open de seriële poort (COM4)
+# 2. Open the serial port (COM4)
 try:
     ser = serial.Serial('COM4', 115200, timeout=1)
     print("👂 Listening on COM4... Press Ctrl+C to stop.\n")
 
 except Exception as e:
     print(
-        f"❌ Kon COM4 niet openen: {e}. "
-        f"Is er nog een andere monitor open?"
+        f"❌ Could not open COM4: {e}. "
+        f"Is another monitor still open?"
     )
     sys.exit(1)
 
 
-# Bepaal de bestandsnaam op basis van de modus
+# Determine the filename based on the mode
 if DISABLE_FILTER:
     output_filename = 'all_devices_output.jsonl'
 else:
     output_filename = 'filtered_output.jsonl'
 
 
-# 3. Luister live naar de ESP32 en verwerk de data
-with open(output_filename, 'a') as log_file:
+# Remove entries older than the retention period.
+def cleanup_log_file(filename):
+    cutoff_time = time.time() - (LOG_RETENTION_DAYS * 24 * 60 * 60)
+    temporary_filename = f"{filename}.tmp"
+
+    try:
+        with open(filename, 'r') as source_file, open(
+            temporary_filename,
+            'w',
+            encoding='utf-8'
+        ) as temporary_file:
+            for line in source_file:
+                try:
+                    entry = json.loads(line)
+                    entry_time = time.mktime(
+                        time.strptime(
+                            entry['timestamp'],
+                            LOG_TIMESTAMP_FORMAT
+                        )
+                    )
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                    temporary_file.write(line)
+                    continue
+
+                if entry_time >= cutoff_time:
+                    temporary_file.write(line)
+
+        os.replace(temporary_filename, filename)
+    except FileNotFoundError:
+        pass
+    finally:
+        if os.path.exists(temporary_filename):
+            os.remove(temporary_filename)
+
+
+def load_announced_names(filename):
+    today = time.strftime('%Y-%m-%d')
+    announced_names = set()
+
+    try:
+        with open(filename, 'r', encoding='utf-8') as source_file:
+            for line in source_file:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if (
+                    entry.get('timestamp', '').startswith(today)
+                    and entry.get('name')
+                    and entry['name'] != 'Unknown Device'
+                ):
+                    announced_names.add(entry['name'])
+    except FileNotFoundError:
+        pass
+
+    return announced_names
+
+
+def queue_name_for_announcement(name):
+    if not ENABLE_VOICE_ANNOUNCEMENTS:
+        return
+
+    with open(VOICE_QUEUE_FILENAME, 'a', encoding='utf-8') as queue_file:
+        queue_file.write(name + '\n')
+        queue_file.flush()
+
+
+cleanup_log_file(output_filename)
+last_cleanup_date = time.strftime('%Y-%m-%d')
+announced_names = load_announced_names(output_filename)
+log_file = open(output_filename, 'a')
+
+# 3. Listen to the ESP32 live and process the data
+try:
     while True:
         try:
+            current_date = time.strftime('%Y-%m-%d')
+            if current_date != last_cleanup_date:
+                log_file.close()
+                cleanup_log_file(output_filename)
+                log_file = open(output_filename, 'a')
+                last_cleanup_date = current_date
+                announced_names = load_announced_names(output_filename)
+
             if ser.in_waiting > 0:
                 line = ser.readline().decode(
                     'utf-8',
                     errors='ignore'
                 ).strip()
 
-                # Controleer of de regel het verwachte formaat heeft
+                # Check whether the line has the expected format
                 if ',' not in line:
                     continue
 
@@ -92,7 +178,7 @@ with open(output_filename, 'a') as log_file:
                 mac = mac.strip().upper()
                 rssi = rssi.strip()
 
-                # Controleer of RSSI een geldig getal is
+                # Check whether RSSI is a valid number
                 try:
                     rssi_value = int(rssi)
                     channel_value = int(channel)
@@ -101,39 +187,39 @@ with open(output_filename, 'a') as log_file:
 
                 current_time = time.time()
 
-                # Controleer RATE-LIMITING:
-                # is de wachttijd al voorbij voor dit apparaat?
+                # Check rate limiting:
+                # has the wait time passed for this device?
                 if (
                     mac in last_logged_time
                     and (current_time - last_logged_time[mac]) < LOG_INTERVAL
                 ):
                     continue
 
-                # 4. Controleer FILTER-MODUS
+                # 4. Check filter mode
                 if DISABLE_FILTER:
-                    # Filter uit:
-                    # log ALLE apparaten.
+                    # Filter off:
+                    # log ALL devices.
                     #
-                    # Als het MAC-adres bekend is in filter.json,
-                    # gebruik dan de bekende naam.
-                    # Anders "Unknown Device".
+                    # If the MAC address is known in filter.json,
+                    # use the known name.
+                    # Otherwise use "Unknown Device".
                     device_name = mac_to_name.get(
                         mac,
                         "Unknown Device"
                     )
 
                 else:
-                    # Filter aan:
-                    # log ALLEEN apparaten die in filter.json staan.
+                    # Filter on:
+                    # log ONLY devices listed in filter.json.
                     if mac in mac_to_name:
                         device_name = mac_to_name[mac]
                     else:
                         continue
 
-                # Update de laatst gelogde tijd voor dit apparaat
+                # Update the last logged time for this device
                 last_logged_time[mac] = current_time
 
-                # Bouw het JSON object
+                # Build the JSON object
                 timestamp_str = time.strftime(
                     "%Y-%m-%d %H:%M:%S"
                 )
@@ -146,27 +232,36 @@ with open(output_filename, 'a') as log_file:
                     "channel": channel_value
                 }
 
-                # Zet het object om naar JSON
+                if (
+                    device_name not in announced_names
+                    and device_name != 'Unknown Device'
+                ):
+                    queue_name_for_announcement(device_name)
+                    announced_names.add(device_name)
+
+                # Convert the object to JSON
                 json_string = json.dumps(log_entry)
 
-                # Toon het resultaat
+                # Display the result
                 print(
                     f"[{log_entry['timestamp']}] "
-                    f"Spotte: {log_entry['name']} "
+                    f"Spotted: {log_entry['name']} "
                     f"({log_entry['mac']}) | "
                     f"RSSI: {log_entry['rssi']}"
                 )
 
-                # Schrijf naar JSONL-bestand
+                # Write to the JSONL file
                 log_file.write(json_string + '\n')
                 log_file.flush()
 
         except KeyboardInterrupt:
-            print("\n🛑 Logger gestopt. Tot ziens!")
+            print("\n🛑 Logger stopped. Goodbye!")
             ser.close()
             break
 
         except Exception:
-            # Vang eventuele corrupte seriële regels op
-            # zonder de logger te laten crashen.
+            # Catch any corrupted serial lines
+            # without allowing the logger to crash.
             pass
+finally:
+    log_file.close()

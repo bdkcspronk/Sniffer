@@ -1,14 +1,35 @@
 import json
-import pandas as pd
+import colorsys
+import hashlib
+
+from datetime import datetime, time, timedelta
+
 import matplotlib
-# Zorg dat er geen pop-up venster opent, zodat het script ongestoord op de achtergrond kan draaien
-matplotlib.use('Agg') 
+
+# Prevent a pop-up window so the script can run undisturbed in the background
+matplotlib.use('Agg')
+
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.patches as patches
-from datetime import datetime, time
+from matplotlib.path import Path
+from matplotlib.transforms import IdentityTransform
+import pandas as pd
 
-# 1. Laad filter.json om de handmatige kleuren op te halen
+
+# Plot configuration
+DEFAULT_COLOR = '#00E676'
+GRID_COLOR = '#263238'
+BACKGROUND_COLOR = "#151722"
+TEXT_COLOR = '#ECEFF1'
+FALLBACK_SATURATION_RANGE = (0.65, 0.9)
+FALLBACK_BRIGHTNESS_RANGE = (0.85, 1.0)
+FIGURE_SIZE = (19.2, 10.8)
+FIGURE_DPI = 100
+CORNER_RADIUS = 8
+CURVE_FACTOR = 0.5522848
+
+# Load custom colors from filter.json.
 mac_colors = {}
 try:
     with open('filter.json', 'r') as f:
@@ -19,7 +40,27 @@ try:
 except Exception:
     pass
 
-# 2. Lees de JSONL data in
+
+def generate_bright_color(identifier):
+    """Generate a stable, bright color for an unconfigured device."""
+    digest = hashlib.sha256(identifier.encode('utf-8')).digest()
+    hue = int.from_bytes(digest[0:2], 'big') / 65535
+    saturation_min, saturation_max = FALLBACK_SATURATION_RANGE
+    brightness_min, brightness_max = FALLBACK_BRIGHTNESS_RANGE
+    saturation = saturation_min + (
+        digest[2] / 255 * (saturation_max - saturation_min)
+    )
+    brightness = brightness_min + (
+        digest[3] / 255 * (brightness_max - brightness_min)
+    )
+    red, green, blue = colorsys.hsv_to_rgb(hue, saturation, brightness)
+    return '#{:02X}{:02X}{:02X}'.format(
+        round(red * 255),
+        round(green * 255),
+        round(blue * 255),
+    )
+
+# Load activity data.
 data = []
 try:
     with open('filtered_output.jsonl', 'r') as f:
@@ -32,115 +73,228 @@ except FileNotFoundError:
 if not data:
     exit()
 
-# 3. Data verwerken met Pandas
+# Prepare the activity data.
 df = pd.DataFrame(data)
 df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-# Filter op vandaag
-vandaag = datetime.now().date()
-df = df[df['timestamp'].dt.date == vandaag]
+# Keep only today's activity.
+today = datetime.now().date()
+df = df[df['timestamp'].dt.date == today]
 
 if df.empty:
     exit()
 
-# Leg de focus op de 5-minuten buckets
+# Group activity into five-minute buckets.
 df['time_bucket'] = df['timestamp'].dt.floor('5min')
-unieke_namen = sorted(df['name'].unique())
+unieke_namen = (
+    df.groupby('name')['timestamp']
+    .min()
+    .sort_values()
+    .index
+    .tolist()
+)
 
-# 4. Modern & Slick Plot Design Setup (Premium Dark Minimalist Theme)
+# Create the plot.
 plt.style.use('dark_background')
-fig, ax = plt.subplots(figsize=(14, 7), facecolor='#0F111A')
-ax.set_facecolor('#0F111A')
+fig, ax = plt.subplots(
+    figsize=FIGURE_SIZE,
+    dpi=FIGURE_DPI,
+    facecolor=BACKGROUND_COLOR,
+)
+ax.set_facecolor(BACKGROUND_COLOR)
 
-DEFAULT_COLOR = '#00E676' 
-GRID_COLOR = '#263238'   
-TEXT_COLOR = '#ECEFF1'   
-
-# Zorg dat gidslijnen achter de balken vallen
+# Keep grid lines behind the markers.
 ax.set_axisbelow(True)
+marker_specs = []
+generated_colors = {}
 
-# 5. Bereken aaneengesloten blokken en plot ze als afgeronde capsules
+# Build marker specifications for each person.
 for y_index, naam in enumerate(unieke_namen):
     persoon_df = df[df['name'] == naam]
-    
-    # Bepaal de kleur
+
     sample_mac = persoon_df['mac'].iloc[0].upper() if not persoon_df.empty else ""
-    user_color = mac_colors.get(sample_mac, DEFAULT_COLOR)
-    
-    # Sorteer unieke 5-minuten tijdstippen
-    gespotte_tijden = sorted(persoon_df['time_bucket'].unique())
-    
-    if not gespotte_tijden:
+    user_color = mac_colors.get(sample_mac)
+    if user_color is None:
+        user_color = generated_colors.setdefault(
+            sample_mac or naam,
+            generate_bright_color(sample_mac or naam),
+        )
+
+    spotted_times = sorted(persoon_df['time_bucket'].unique())
+
+    if not spotted_times:
         continue
-        
-    # Algoritme om opeenvolgende tijdstippen te groeperen tot blokken
-    blokken = []
-    start_tijd = gespotte_tijden[0]
-    vorige_tijd = gespotte_tijden[0]
-    
-    for actuele_tijd in gespotte_tijden[1:]:
-        if actuele_tijd - vorige_tijd <= pd.Timedelta(minutes=10):
-            vorige_tijd = actuele_tijd
+
+    blocks = []
+    start_time = spotted_times[0]
+    previous_time = spotted_times[0]
+
+    for current_time in spotted_times[1:]:
+        if current_time - previous_time <= pd.Timedelta(minutes=10):
+            previous_time = current_time
         else:
-            end_tijd = vorige_tijd + pd.Timedelta(minutes=5)
-            blokken.append((start_tijd, end_tijd))
-            start_tijd = actuele_tijd
-            vorige_tijd = actuele_tijd
-            
-    end_tijd = vorige_tijd + pd.Timedelta(minutes=5)
-    blokken.append((start_tijd, end_tijd))
-    
-    # NIEUW: Teken elk blok als een FancyBboxPatch voor afgeronde hoeken
-    for start, end in blokken:
+            end_time = previous_time + pd.Timedelta(minutes=5)
+            blocks.append((start_time, end_time))
+            start_time = current_time
+            previous_time = current_time
+
+    end_time = previous_time + pd.Timedelta(minutes=5)
+    blocks.append((start_time, end_time))
+
+    for start, end in blocks:
         start_num = mdates.date2num(start)
         end_num = mdates.date2num(end)
         width = end_num - start_num
-        
-        # y-positie en hoogte van de balk
-        height = 0.25
-        y_pos = y_index - (height / 2)
-        
-        # Maak een afgeronde box patch aan
-                # Maak een afgeronde box patch aan volgens de nieuwste Matplotlib specificaties
-        box = patches.FancyBboxPatch(
-            (start_num, y_pos), width, height,
-            boxstyle=patches.BoxStyle("Round", pad=0.0, rounding_size=0.0015), # 'rounding_size' vervangt 'radius'
-            facecolor=user_color,
-            edgecolor='none',
-            alpha=0.9,
-            zorder=3
-        )
-        ax.add_patch(box)
 
-# 6. As-instellingen en grenzen (08:00 - 23:59)
-ax.set_xlim(mdates.date2num(datetime.combine(vandaag, time(8, 0))), mdates.date2num(datetime.combine(vandaag, time(23, 59))))
+        height = 0.2 * (len(unieke_namen) + 0.5) / 10.5
+        y_pos = y_index - (height / 2)
+
+        marker_specs.append(
+            (start_num, end_num, y_pos, height, user_color)
+        )
+
+# Configure axis limits.
+current_datetime = datetime.now()
+ax.set_xlim(
+    mdates.date2num(datetime.combine(today, time(8, 0))),
+    mdates.date2num(current_datetime + timedelta(minutes=30))
+)
 ax.set_ylim(-0.75, len(unieke_namen) - 0.25)
 
-# Zet de namen netjes op de Y-as
+# Configure Y-axis labels.
 ax.set_yticks(range(len(unieke_namen)))
-ax.set_yticklabels(unieke_namen, fontsize=12, fontweight='500', color=TEXT_COLOR)
+ax.set_yticklabels(
+    unieke_namen,
+    fontsize=20,
+    fontweight='500',
+    color=TEXT_COLOR,
+)
+ax.invert_yaxis()
 
-# Formatteer de X-as (Tijd) met labels om het uur
+# Configure X-axis labels.
 ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
 ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-ax.tick_params(axis='x', colors=TEXT_COLOR, labelsize=10, pad=8)
+ax.tick_params(axis='x', colors=TEXT_COLOR, labelsize=20, pad=8)
 ax.tick_params(axis='y', colors=TEXT_COLOR, pad=12)
 
-# Minimalistische Styling (Verwijder de harde randen / spines)
+# Remove plot borders.
 for spine in ['top', 'right', 'left', 'bottom']:
     ax.spines[spine].set_visible(False)
 
-# Subtiele gidslijnen achter de balken
-ax.xaxis.grid(True, linestyle=':', color=GRID_COLOR, alpha=0.7, zorder=1)
+# Add X-axis grid lines every 15 minutes, with stronger half-hour and hourly lines.
+grid_start = pd.Timestamp(datetime.combine(today, time(8, 0)))
+grid_end = pd.Timestamp(current_datetime + timedelta(minutes=5))
+for grid_time in pd.date_range(grid_start, grid_end, freq='15min'):
+    if grid_time.minute == 0:
+        line_width = 2.0
+        line_alpha = 0.9
+    elif grid_time.minute == 30:
+        line_width = 1.3
+        line_alpha = 0.75
+    else:
+        line_width = 0.7
+        line_alpha = 0.5
+
+    ax.axvline(
+        grid_time,
+        linestyle='-',
+        linewidth=line_width,
+        color=GRID_COLOR,
+        alpha=line_alpha,
+        zorder=1
+    )
+
+# Mark the current time.
+ax.axvline(
+    current_datetime,
+    linestyle='--',
+    linewidth=1.5,
+    color=TEXT_COLOR,
+    alpha=0.9,
+    zorder=2,
+)
+
+# Add subtle horizontal grid lines.
 ax.yaxis.grid(True, linestyle='-', color=GRID_COLOR, alpha=0.3, zorder=1)
 
-# Strakke hoofdtitel
-ax.set_title('FRANCKEN ACTIVITY TRACKER', fontsize=16, fontweight='bold', color=TEXT_COLOR, loc='left', pad=25)
+# Add the title.
+ax.set_title(
+    'FRANCKEN ACTIVITY TRACKER',
+    fontsize=25,
+    fontweight='bold',
+    color=TEXT_COLOR,
+    loc='left',
+    pad=25,
+)
 
-# Zorg dat de tijds-labels elegant schuin staan
+# Finalize layout before converting marker coordinates to screen space.
 fig.autofmt_xdate()
 plt.tight_layout()
 
-# Sla de grafiek op
-plt.savefig('slide.png', dpi=300, facecolor=fig.get_facecolor(), edgecolor='none')
+fig.canvas.draw()
+data_transform = ax.transData
+display_transform = IdentityTransform()
+
+for start_num, end_num, y_pos, height, user_color in marker_specs:
+    x0, y0 = data_transform.transform((start_num, y_pos))
+    x1, y1 = data_transform.transform((end_num, y_pos + height))
+    radius = min(CORNER_RADIUS, abs(x1 - x0) / 2, abs(y1 - y0) / 2)
+    x0, x1 = sorted((x0, x1))
+    y0, y1 = sorted((y0, y1))
+    curve = radius * CURVE_FACTOR
+
+    rounded_path = Path([
+        (x0 + radius, y0),
+        (x1 - radius, y0),
+        (x1 - radius + curve, y0),
+        (x1, y0 + radius - curve),
+        (x1, y0 + radius),
+        (x1, y1 - radius),
+        (x1, y1 - radius + curve),
+        (x1 - radius + curve, y1),
+        (x1 - radius, y1),
+        (x0 + radius, y1),
+        (x0 + radius - curve, y1),
+        (x0, y1 - radius + curve),
+        (x0, y1 - radius),
+        (x0, y0 + radius),
+        (x0, y0 + radius - curve),
+        (x0 + radius - curve, y0),
+        (x0 + radius, y0),
+    ], [
+        Path.MOVETO,
+        Path.LINETO,
+        Path.CURVE4,
+        Path.CURVE4,
+        Path.CURVE4,
+        Path.LINETO,
+        Path.CURVE4,
+        Path.CURVE4,
+        Path.CURVE4,
+        Path.LINETO,
+        Path.CURVE4,
+        Path.CURVE4,
+        Path.CURVE4,
+        Path.LINETO,
+        Path.CURVE4,
+        Path.CURVE4,
+        Path.CURVE4,
+    ])
+    box = patches.PathPatch(
+        rounded_path,
+        transform=display_transform,
+        facecolor=user_color,
+        edgecolor='none',
+        alpha=0.9,
+        zorder=3
+    )
+    ax.add_patch(box)
+
+# Save the graph.
+plt.savefig(
+    'slide.png',
+    dpi=FIGURE_DPI,
+    facecolor=fig.get_facecolor(),
+    edgecolor='none',
+)
 plt.close(fig)

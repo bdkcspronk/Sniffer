@@ -5,7 +5,7 @@
 int currentChannel = 1;
 unsigned long lastChannelChange = 0;
 
-const uint32_t HOP_INTERVAL = 500;  // 500 ms per channel
+const uint32_t HOP_INTERVAL = 5000;  // 5 seconds per channel
 
 void sniffer_callback(void* buf, wifi_promiscuous_pkt_type_t type)
 {
