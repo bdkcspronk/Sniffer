@@ -1,8 +1,9 @@
 import json
 import colorsys
 import hashlib
+from pathlib import Path as FilePath
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 
 import matplotlib
 
@@ -204,16 +205,6 @@ for grid_time in pd.date_range(grid_start, grid_end, freq='15min'):
         zorder=1
     )
 
-# Mark the current time.
-ax.axvline(
-    current_datetime,
-    linestyle='--',
-    linewidth=1.5,
-    color=TEXT_COLOR,
-    alpha=0.9,
-    zorder=2,
-)
-
 # Add subtle horizontal grid lines.
 ax.yaxis.grid(True, linestyle='-', color=GRID_COLOR, alpha=0.3, zorder=1)
 
@@ -290,9 +281,19 @@ for start_num, end_num, y_pos, height, user_color in marker_specs:
     )
     ax.add_patch(box)
 
-# Save the graph.
+# Save the graph with a unique UTC timestamped filename.
+poster_directory = FilePath.home() / 'tv-posters'
+poster_directory.mkdir(parents=True, exist_ok=True)
+for old_poster in poster_directory.glob('slide-*.png'):
+    if old_poster.is_file():
+        old_poster.unlink()
+
+poster_path = poster_directory / (
+    f"slide-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')}.png"
+)
+
 plt.savefig(
-    'slide.png',
+    poster_path,
     dpi=FIGURE_DPI,
     facecolor=fig.get_facecolor(),
     edgecolor='none',

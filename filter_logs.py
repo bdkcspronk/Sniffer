@@ -1,8 +1,40 @@
 import json
+import grp
 import os
-import serial
+import shlex
 import time
 import sys
+
+PIO_PYTHON = '/home/scriptcie/.platformio/penv/bin/python'
+
+
+def ensure_platformio_python():
+    if os.path.abspath(sys.executable) == os.path.abspath(PIO_PYTHON):
+        return
+
+    os.execv(PIO_PYTHON, [PIO_PYTHON, os.path.abspath(__file__), *sys.argv[1:]])
+
+
+def ensure_dialout_access():
+    dialout_gid = grp.getgrnam('dialout').gr_gid
+    if dialout_gid in os.getgroups() or os.environ.get(
+        'SNIFFER_DIALOUT_REEXEC'
+    ):
+        return
+
+    environment = os.environ.copy()
+    environment['SNIFFER_DIALOUT_REEXEC'] = '1'
+    command = ' '.join(
+        shlex.quote(argument)
+        for argument in [sys.executable, os.path.abspath(__file__), *sys.argv[1:]]
+    )
+    os.execvpe('sg', ['sg', 'dialout', '-c', command], environment)
+
+
+ensure_platformio_python()
+ensure_dialout_access()
+
+import serial
 
 # Check whether the user passed the '--all' argument
 DISABLE_FILTER = '--all' in sys.argv
@@ -53,14 +85,14 @@ except Exception as e:
         sys.exit(1)
 
 
-# 2. Open the serial port (COM4)
+# 2. Open the serial port
 try:
-    ser = serial.Serial('COM4', 115200, timeout=1)
-    print("👂 Listening on COM4... Press Ctrl+C to stop.\n")
+    ser = serial.Serial('/dev/ttyUSB0', 115200, timeout=1)
+    print("👂 Listening on ttyUSB0... Press Ctrl+C to stop.\n")
 
 except Exception as e:
     print(
-        f"❌ Could not open COM4: {e}. "
+        f"❌ Could not open ttyUSB0: {e}. "
         f"Is another monitor still open?"
     )
     sys.exit(1)

@@ -1,10 +1,38 @@
+import grp
 import subprocess
 import time
 import sys
 import os
+import shlex
 
-# Get the correct Python path from PlatformIO that we used earlier
-PIO_PYTHON = r"C:\Users\LEDEN\.platformio\penv\Scripts\python.exe"
+PIO_PYTHON = "/home/scriptcie/.platformio/penv/bin/python"
+
+
+def ensure_platformio_python():
+    if os.path.abspath(sys.executable) == os.path.abspath(PIO_PYTHON):
+        return
+
+    os.execv(PIO_PYTHON, [PIO_PYTHON, os.path.abspath(__file__), *sys.argv[1:]])
+
+
+def ensure_dialout_access():
+    dialout_gid = grp.getgrnam('dialout').gr_gid
+    if dialout_gid in os.getgroups() or os.environ.get(
+        'SNIFFER_DIALOUT_REEXEC'
+    ):
+        return
+
+    environment = os.environ.copy()
+    environment['SNIFFER_DIALOUT_REEXEC'] = '1'
+    command = ' '.join(
+        shlex.quote(argument)
+        for argument in [sys.executable, os.path.abspath(__file__), *sys.argv[1:]]
+    )
+    os.execvpe('sg', ['sg', 'dialout', '-c', command], environment)
+
+
+ensure_platformio_python()
+ensure_dialout_access()
 
 # Check whether the user passed '--all' to this main script
 arguments = sys.argv[1:]
@@ -21,7 +49,7 @@ voice_command = [PIO_PYTHON, "voice_announcer.py"]
 voice_process = subprocess.Popen(voice_command)
 log_process = subprocess.Popen(log_command)
 
-print("   Port COM4 opened and logging live data.")
+print("   Port ttyUSB0 opened and logging live data.")
 print("   The graph will now refresh automatically every 30 seconds.")
 print("   Press Ctrl+C to stop the ENTIRE system safely.\n")
 print("-" * 60)
@@ -45,10 +73,10 @@ try:
 except KeyboardInterrupt:
     print("\n\n🛑 Ctrl+C detected! Shutting down the system...")
     
-    # Close the background logging process cleanly so COM4 becomes available again
+    # Close the background logging process cleanly so ttyUSB0 becomes available again
     log_process.terminate()
     log_process.wait()
     voice_process.terminate()
     voice_process.wait()
     
-    print("🔒 COM4 closed successfully. Logger stopped. Goodbye!")
+    print("🔒 ttyUSB0 closed successfully. Logger stopped. Goodbye!")
