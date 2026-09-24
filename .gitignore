@@ -13,3 +13,4 @@ en_US-ryan-high.onnx
 en_US-ryan-high.onnx.json
 output.wav
 start_sniffer.ps1
+filtered_output.jsonl
