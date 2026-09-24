@@ -29,6 +29,13 @@ FIGURE_SIZE = (19.2, 10.8)
 FIGURE_DPI = 100
 CORNER_RADIUS = 8
 CURVE_FACTOR = 0.5522848
+VERTICAL_AXIS_PADDING = 1.0
+SUBPLOT_MARGINS = {
+    'left': 0.12,
+    'right': 0.98,
+    'bottom': 0.12,
+    'top': 0.88,
+}
 
 # Load custom colors from filter.json.
 mac_colors = {}
@@ -160,7 +167,10 @@ ax.set_xlim(
     mdates.date2num(datetime.combine(today, time(8, 0))),
     mdates.date2num(current_datetime + timedelta(minutes=30))
 )
-ax.set_ylim(-0.75, len(unieke_namen) - 0.25)
+ax.set_ylim(
+    -VERTICAL_AXIS_PADDING,
+    len(unieke_namen) - 1 + VERTICAL_AXIS_PADDING,
+)
 
 # Configure Y-axis labels.
 ax.set_yticks(range(len(unieke_namen)))
@@ -220,7 +230,7 @@ ax.set_title(
 
 # Finalize layout before converting marker coordinates to screen space.
 fig.autofmt_xdate()
-plt.tight_layout()
+fig.subplots_adjust(**SUBPLOT_MARGINS)
 
 fig.canvas.draw()
 data_transform = ax.transData

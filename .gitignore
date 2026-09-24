@@ -6,6 +6,10 @@
 __pycache__
 *.png
 filter.json
-*.ini
+all_devices_output.jsonl
 filtered_output.jsonl
 voice_queue.jsonl
+en_US-ryan-high.onnx
+en_US-ryan-high.onnx.json
+output.wav
+start_sniffer.ps1
